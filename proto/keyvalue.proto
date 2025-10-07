@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package compilation_cache_service.keyvalue.v1;
+
+// KeyValueDB service for cache key lookups
+service KeyValueDB {
+  // Query cache by key and retrieve the complete cached artifact
+  rpc GetValue(GetValueRequest) returns (GetValueResponse);
+}
+
+// Request message for GetValue RPC
+message GetValueRequest {
+  // Cache key (content hash derived from source, compiler flags, SDK version, etc.)
+  bytes key = 1;
+}
+
+// Response message for GetValue RPC
+message GetValueResponse {
+  // Whether the key was found in the cache
+  bool found = 1;
+
+  // The complete artifact data (PCM files, object files, metadata, etc.)
+  // This field contains the FULL artifact, not a reference to it
+  bytes value = 2;
+}
