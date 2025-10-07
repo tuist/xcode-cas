@@ -252,11 +252,6 @@ To implement a compatible CAS server:
    - Content-addressable storage for artifacts
    - Support for large objects
 
-4. **Performance**
-   - Handle concurrent uploads
-   - Low-latency lookups
-   - Efficient deduplication
-
 ### Client Configuration
 
 Configure Xcode to use the CAS server:
@@ -327,9 +322,9 @@ This outputs:
 
 The protocol implementation is in:
 
-- **Swift Compiler:** `apple/swift` repository
-- **Swift Driver:** `apple/swift-driver` repository
-- **LLVM:** `llvm/llvm-project` (CAS support)
+- **Swift Compiler:** [apple/swift](https://github.com/apple/swift)
+- **Swift Driver:** [apple/swift-driver](https://github.com/apple/swift-driver)
+- **LLVM:** [llvm/llvm-project](https://github.com/llvm/llvm-project) (CAS support)
 
 ### Search Hints
 
@@ -351,7 +346,7 @@ Look for:
 | Cache Type | CAS        | AC + CAS    | Hash-based |
 | Artifacts  | PCM, objects | Actions, blobs | Objects only |
 
-## Appendix: Discovery Methodology 🔬
+## Discovery Methodology 🔬
 
 This protocol was reverse-engineered using:
 
