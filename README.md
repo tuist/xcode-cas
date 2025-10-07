@@ -4,10 +4,14 @@
 
 This document describes the **Compilation Cache Service Protocol** used by Xcode to communicate with remote caching servers. The protocol enables distributed caching of Swift and Clang compilation artifacts.
 
-- **Protocol Type:** gRPC over HTTP/2
-- **Transport:** Unix Domain Socket or TCP
-- **Client Library:** `grpc-swift-nio/1.14.1`
-- **Protocol Definitions:** [`proto/`](proto/)
+| Property | Value |
+|----------|-------|
+| **Protocol Type** | gRPC over HTTP/2 |
+| **Transport** | Unix Domain Socket or TCP |
+| **Client Library** | `grpc-swift-nio/1.14.1` |
+| **Protocol Definitions** | [`proto/`](proto/) |
+
+---
 
 ## Services 🛠️
 
@@ -15,110 +19,139 @@ The protocol consists of two gRPC services:
 
 ### 1. KeyValueDB Service 🔑
 
-**Package:** `compilation_cache_service.keyvalue.v1`
+> Handles cache lookups and returns complete artifacts inline
 
-**Service:** `KeyValueDB`
-
-**Proto Definition:** [`proto/keyvalue.proto`](proto/keyvalue.proto)
+| Property | Value |
+|----------|-------|
+| **Package** | `compilation_cache_service.keyvalue.v1` |
+| **Service** | `KeyValueDB` |
+| **Proto** | [`proto/keyvalue.proto`](proto/keyvalue.proto) |
 
 #### GetValue Method
 
 Queries the cache for a specific key and retrieves the complete cached artifact.
 
 **RPC Path:**
+
 ```
 /compilation_cache_service.keyvalue.v1.KeyValueDB/GetValue
 ```
 
 **Request:**
-- `key` (bytes): Cache key derived from source content, compiler flags, SDK version, module dependencies, and build configuration
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | bytes | Cache key derived from source content, compiler flags, SDK version, module dependencies, and build configuration |
 
 **Response:**
-- `found` (bool): Whether the artifact exists in the cache
-- `value` (bytes): **The complete artifact data** (only present if `found=true`)
 
-**Important:** The response contains the **full artifact data inline**, not a reference. There is no separate fetch operation.
+| Field | Type | Description |
+|-------|------|-------------|
+| `found` | bool | Whether the artifact exists in the cache |
+| `value` | bytes | **The complete artifact data** (only present if `found=true`) |
+
+> **⚠️ Important:** The response contains the **full artifact data inline**, not a reference. There is no separate fetch operation.
 
 **Usage Pattern:**
-- Called at the beginning of compilation
-- Multiple parallel requests (one per artifact)
-- If `found=true`, Xcode uses the returned artifact directly
-- If `found=false`, Xcode compiles and uploads via `Save`
+
+- ✅ Called at the beginning of compilation
+- ✅ Multiple parallel requests (one per artifact)
+- ✅ If `found=true`, Xcode uses the returned artifact directly
+- ✅ If `found=false`, Xcode compiles and uploads via `Save`
 
 ---
 
 ### 2. CASDBService 💾
 
-**Package:** `compilation_cache_service.cas.v1`
+> Handles storing compilation artifacts
 
-**Service:** `CASDBService`
-
-**Proto Definition:** [`proto/cas.proto`](proto/cas.proto)
+| Property | Value |
+|----------|-------|
+| **Package** | `compilation_cache_service.cas.v1` |
+| **Service** | `CASDBService` |
+| **Proto** | [`proto/cas.proto`](proto/cas.proto) |
 
 #### Save Method
 
 Stores a compilation artifact in the Content-Addressable Storage (CAS).
 
 **RPC Path:**
+
 ```
 /compilation_cache_service.cas.v1.CASDBService/Save
 ```
 
 **Request:**
-- `cas_id` (bytes): Content hash of the artifact data
-- `data` (bytes): The complete artifact data
-- `type` (string): Artifact type (e.g., "pcm", "o", "metadata")
-- `metadata` (map<string, string>): Optional metadata
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cas_id` | bytes | Content hash of the artifact data |
+| `data` | bytes | The complete artifact data |
+| `type` | string | Artifact type (e.g., "pcm", "o", "metadata") |
+| `metadata` | map<string, string> | Optional metadata |
 
 **Response:**
-- `cas_id` (bytes): Confirmed CAS ID
-- `success` (bool): Whether the save succeeded
-- `message` (string): Optional status message
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cas_id` | bytes | Confirmed CAS ID |
+| `success` | bool | Whether the save succeeded |
+| `message` | string | Optional status message |
 
 **Usage Pattern:**
-- Called during and after compilation
-- Multiple concurrent uploads
-- Stores precompiled modules (.pcm), objects (.o), and metadata
+
+- ✅ Called during and after compilation
+- ✅ Multiple concurrent uploads
+- ✅ Stores precompiled modules (.pcm), objects (.o), and metadata
+
+---
 
 ## Protocol Details 📋
 
 ### Connection
 
-**Transport Options:**
-- Unix Domain Socket (preferred for local development)
-- TCP (for remote servers)
+| Property | Value |
+|----------|-------|
+| **Transport Options** | Unix Domain Socket (preferred) or TCP |
+| **Protocol** | HTTP/2 with gRPC framing |
+| **Socket Path Env Var** | `COMPILATION_CACHE_REMOTE_SERVICE_PATH` |
 
-**Protocol:** HTTP/2 with gRPC framing
+**Example Configuration:**
 
-**Socket Path Configuration:**
 ```bash
 COMPILATION_CACHE_REMOTE_SERVICE_PATH=/path/to/cas.sock
 ```
+
+---
 
 ### Request Headers
 
 Every gRPC request includes these HTTP/2 headers:
 
-```
-:method: POST
-:path: /compilation_cache_service.{package}.{version}.{Service}/{Method}
-:authority: localhost
-:scheme: http
-content-type: application/grpc
-te: trailers
-user-agent: grpc-swift-nio/1.14.1
-```
+| Header | Value |
+|--------|-------|
+| `:method` | `POST` |
+| `:path` | `/compilation_cache_service.{package}.{version}.{Service}/{Method}` |
+| `:authority` | `localhost` |
+| `:scheme` | `http` |
+| `content-type` | `application/grpc` |
+| `te` | `trailers` |
+| `user-agent` | `grpc-swift-nio/1.14.1` |
+
+---
 
 ### Response Format
 
 Successful responses include:
 
-```
-:status: 200
-content-type: application/grpc
-grpc-status: 0
-grpc-message: OK
-```
+| Header | Value |
+|--------|-------|
+| `:status` | `200` |
+| `content-type` | `application/grpc` |
+| `grpc-status` | `0` |
+| `grpc-message` | `OK` |
+
+---
 
 ## Message Flow 🔄
 
@@ -191,32 +224,46 @@ This means:
 
 ## Cache Keys 🔐
 
-Cache keys are content hashes derived from:
+Cache keys are content hashes derived from multiple inputs to ensure uniqueness:
 
-- Source file contents
-- Compiler flags and arguments
-- SDK version
-- Module dependencies
-- Build configuration
-- Toolchain version
+| Input | Description |
+|-------|-------------|
+| Source file contents | The actual source code |
+| Compiler flags | Arguments passed to the compiler |
+| SDK version | Version of the development SDK |
+| Module dependencies | Dependencies and their versions |
+| Build configuration | Debug, Release, etc. |
+| Toolchain version | Version of Xcode/compiler |
 
 **Format:** Base64-encoded binary hash
 
-**Example:** `0~YWoYNXXwg7v_Gpj7EqwaHJeXMY6Q0FSYANeEC3z_Laeez9xEdOC9TWkHvdglkVr5U8HVuYxo2G9nK11Cl9N9xQ==`
+**Example:**
+
+```
+0~YWoYNXXwg7v_Gpj7EqwaHJeXMY6Q0FSYANeEC3z_Laeez9xEdOC9TWkHvdglkVr5U8HVuYxo2G9nK11Cl9N9xQ==
+```
 
 **Structure:**
-- Prefix: `0~` (schema version identifier)
-- Hash: Base64-encoded SHA-512 or similar cryptographic hash
+
+| Component | Description |
+|-----------|-------------|
+| `0~` | Schema version identifier |
+| Hash data | Base64-encoded SHA-512 or similar |
+
+---
 
 ## CAS IDs 🆔
 
 Content-Addressable Storage IDs are cryptographic hashes of artifact data.
 
-**Properties:**
-- Deterministic: same content always produces the same ID
-- Collision-resistant: uses SHA-256 or stronger
-- Used for deduplication on the server side
-- Enables integrity verification
+| Property | Description |
+|----------|-------------|
+| **Deterministic** | Same content always produces the same ID |
+| **Collision-resistant** | Uses SHA-256 or stronger |
+| **Deduplication** | Used for server-side deduplication |
+| **Integrity** | Enables tamper detection |
+
+---
 
 ## Implementation Requirements 🏗️
 
