@@ -50,7 +50,8 @@ Queries the cache for a specific key and retrieves the complete cached artifact.
 | `found` | bool | Whether the artifact exists in the cache |
 | `value` | bytes | **The complete artifact data** (only present if `found=true`) |
 
-> **⚠️ Important:** The response contains the **full artifact data inline**, not a reference. There is no separate fetch operation.
+> [!IMPORTANT]
+> The response contains the **full artifact data inline**, not a reference. There is no separate fetch operation.
 
 **Usage Pattern:**
 
@@ -112,9 +113,12 @@ Stores a compilation artifact in the Content-Addressable Storage (CAS).
 
 | Property | Value |
 |----------|-------|
-| **Transport Options** | Unix Domain Socket (preferred) or TCP |
+| **Transport** | Unix Domain Socket only |
 | **Protocol** | HTTP/2 with gRPC framing |
 | **Socket Path Env Var** | `COMPILATION_CACHE_REMOTE_SERVICE_PATH` |
+
+> [!IMPORTANT]
+> Xcode's CAS protocol **only supports Unix domain sockets**. HTTP/TCP URLs (like `http://127.0.0.1:9999`) are not supported and will be silently ignored.
 
 **Example Configuration:**
 
