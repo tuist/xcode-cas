@@ -192,6 +192,116 @@ Successful responses include:
 ← Confirmation
 ```
 
+---
+
+## ⚠️ Critical Limitation: Write-Only Remote Cache
+
+> [!WARNING]
+> **Xcode's remote CAS protocol implementation is asymmetric and write-only.** This significantly limits its usefulness for distributed caching.
+
+### What Xcode Actually Does
+
+Through extensive testing and protocol analysis, we've discovered that Xcode only calls **2 out of 4** protocol methods:
+
+| Method | Service | Called by Xcode? | Purpose |
+|--------|---------|------------------|---------|
+| **GetValue** | KeyValueDB | ✅ YES | Query remote action cache (always returns NOT_FOUND) |
+| **PutValue** | KeyValueDB | ❌ **NEVER** | Write action cache entries to remote |
+| **Save** | CASDBService | ✅ YES | Store compiled artifacts (Mach-O binaries) |
+| **Load** | CASDBService | ❌ **NEVER** | Retrieve artifacts from remote |
+
+### Why This Happens
+
+**Symbol analysis of libToolchainCASPlugin.dylib reveals incomplete implementation:**
+
+Analysis of `/Applications/Xcode.app/Contents/Developer/usr/lib/libToolchainCASPlugin.dylib` shows:
+
+```bash
+# All 4 gRPC methods ARE defined in the protocol:
+/compilation_cache_service.cas.v1.CASDBService/Load
+/compilation_cache_service.cas.v1.CASDBService/Save
+/compilation_cache_service.keyvalue.v1.KeyValueDB/GetValue
+/compilation_cache_service.keyvalue.v1.KeyValueDB/PutValue
+
+# But RemoteCompilationCache class only implements:
+RemoteCompilationCache.remoteCachePut(key:value:) → EventLoopFuture
+RemoteCompilationCache.remoteCASSave() → EventLoopFuture
+
+# Missing implementations:
+❌ No remoteCacheGet method (would call GetValue)
+❌ No remoteCASLoad method (would call Load)
+```
+
+**Xcode only maintains the action cache (v3.actions) locally:**
+
+1. During compilation, Xcode queries the remote with `GetValue(cache_key)`
+2. The remote server has NO action cache entries (Xcode never calls `PutValue`)
+3. `GetValue` always returns `NOT_FOUND` or empty responses
+4. Xcode compiles locally and calls `Save` to store artifacts remotely
+5. Without cache hits from `GetValue`, there's no reason to call `Load`
+
+**Result:** The remote server stores CAS objects but has no way to tell Xcode which artifacts exist for which cache keys.
+
+### Experimental Evidence
+
+```bash
+# Build 1 (clean cache)
+$ rm -rf ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/
+$ xcodebuild ...
+→ 60× GetValue (all MISS)
+→ 73× Save
+→ 0× PutValue  ❌ Never called
+→ 0× Load      ❌ Never called
+
+# Build 2 (with local cache)
+$ xcodebuild ...
+# NO remote server calls at all!
+# All cache hits come from local v3.actions file
+
+# Build 3 (with SWIFT_ENABLE_EXPLICIT_MODULES=YES)
+$ rm -rf ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/
+$ xcodebuild ... SWIFT_ENABLE_EXPLICIT_MODULES=YES
+→ 60× GetValue (all MISS)
+→ 71× Save
+→ 0× PutValue  ❌ Still never called
+→ 0× Load      ❌ Still never called
+```
+
+### How Bitrise Works Around This
+
+Bitrise doesn't rely on Xcode's `PutValue`/`Load` methods. Instead, they use a **filesystem-based approach**:
+
+```bash
+# Before build: Restore local cache from remote
+bitrise-build-cache cache-restore
+# Downloads ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/
+# Includes v3.actions (action cache) + v8.*.leaf files (CAS objects)
+
+# During build: Xcode works with LOCAL cache
+xcodebuild ...
+# GetValue/Save may be called but are mostly unused
+# Action cache hits come from local v3.actions file
+
+# After build: Push updated local cache to remote
+bitrise-build-cache cache-push
+# Uploads updated v3.actions + new v8.*.leaf files
+```
+
+**The gRPC protocol is only used for storing artifacts during builds, not for distributed cache lookup.**
+
+### Implications for Server Implementations
+
+If you're implementing a remote CAS server:
+
+1. **Don't expect `PutValue` calls** - Xcode never writes action cache entries to remote
+2. **`GetValue` will always miss** - The remote has no action cache mappings
+3. **`Save` stores artifacts** - But without action cache entries, they're unretrievable
+4. **`Load` is never called** - Xcode doesn't fetch from remote CAS
+
+**Recommendation:** Implement a Bitrise-style filesystem sync approach instead of relying on the gRPC protocol for distributed caching.
+
+---
+
 ## Artifact Types 📦
 
 The protocol handles these compilation artifacts:
@@ -415,23 +525,55 @@ This protocol was reverse-engineered using:
 **1. Traffic Capture**
 - Custom HTTP/2 server using Python h2 library
 - Unix socket interception with socat
+- Request/response logging to JSON for analysis
 
 **2. Protocol Analysis**
 - Header inspection and gRPC path extraction
-- Protobuf message capture and analysis
+- Protobuf message capture and manual decoding
 - Request/response pattern identification
+- Symbol analysis of `/Applications/Xcode.app/Contents/Developer/usr/lib/libToolchainCASPlugin.dylib`
 
 **3. Experimental Verification**
-- Implemented test server with artifact storage
+- Implemented full gRPC server with all 4 methods (GetValue, PutValue, Save, Load)
+- Tested with clean builds to measure method call patterns
 - Confirmed GetValue returns full artifacts inline
 - Validated by successful cache hits without connection failures
 
-**4. Key Finding**
-- Testing with actual artifact data confirmed no separate Load/Get/Fetch operation exists
-- Cache hits succeeded without broken pipe errors when returning full artifacts
+**4. Critical Discovery: Asymmetric Protocol Implementation**
+
+Through systematic testing, we discovered Xcode's implementation is incomplete:
+
+```bash
+# Test 1: Clean cache build
+$ rm -rf ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/
+$ xcodebuild ... (with remote server)
+Result: 60× GetValue, 73× Save, 0× PutValue, 0× Load
+
+# Test 2: Rebuild with local cache
+$ xcodebuild ...
+Result: 0 remote calls (100% cache hits from local v3.actions file)
+
+# Test 3: Delete local cache again
+$ rm -rf ~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/
+$ xcodebuild ...
+Result: Same as Test 1 - still 0× PutValue, 0× Load
+```
+
+**Conclusion:** Xcode never calls `PutValue` or `Load`, making the remote cache write-only.
+
+**5. Bitrise Analysis**
+- Reverse-engineered Bitrise's `bitrise-build-cache` binary (Go)
+- Discovered they implement filesystem sync, not pure gRPC caching
+- Their `cache-restore` and `cache-push` commands sync the entire local cache directory
+
+**6. Local Cache Investigation**
+- Analyzed `~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex/plugin/v1.1/`
+- Found `v3.actions` (action cache) and `v8.*.leaf` (CAS objects)
+- Confirmed Xcode only writes action cache mappings locally
 
 ---
 
-**Version:** 1.1
-**Last Updated:** 2025-10-07
+**Version:** 2.0
+**Last Updated:** 2025-10-09
 **Status:** Reverse-engineered and experimentally verified from Xcode 16
+**Major Update:** Discovered protocol asymmetry - Xcode never calls PutValue/Load
